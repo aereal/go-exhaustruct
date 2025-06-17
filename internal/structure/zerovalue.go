@@ -26,9 +26,12 @@ func zeroValueInternal(typ types.Type, useTypeName bool, currentPkg *types.Packa
 			// For named struct types, check if we need the full type name
 			pkg := named.Obj().Pkg()
 
-			// If it's the same package as the current context, use short form
+			// Always use the type name for struct types
+			// For same package, use just the type name; for different packages, use full name
 			if pkg != nil && currentPkg != nil && pkg.Path() == currentPkg.Path() {
-				return zeroValueInternal(underlying, false, currentPkg)
+				// Same package: use just the type name
+				typeName := named.Obj().Name()
+				return fmt.Sprintf("%s%s", typeName, zeroValueInternal(underlying, false, currentPkg))
 			}
 
 			// Different package, use full type name
