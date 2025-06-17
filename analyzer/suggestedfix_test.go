@@ -118,7 +118,7 @@ func TestSuggestedFixWithAnalysisTest(t *testing.T) {
 	t.Parallel()
 
 	// Create analyzer with pattern matching the test package
-	a, err := analyzer.NewAnalyzer([]string{`.*suggestedfix\..*`}, nil)
+	a, err := analyzer.NewAnalyzer([]string{`.*suggestedfix\..*`, `suggestedfix/d\..*`}, nil)
 	require.NoError(t, err)
 
 	// Run the analyzer with suggested fixes enabled
