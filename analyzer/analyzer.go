@@ -342,7 +342,7 @@ func (a *analyzer) generateSuggestedFix(
 		}
 
 		if fieldType != nil {
-			zeroVal := structure.ZeroValue(fieldType)
+			zeroVal := structure.ZeroValueWithContext(fieldType, pass.Pkg)
 			if isNamed || len(lit.Elts) == 0 {
 				newFields = append(newFields, fmt.Sprintf("%s: %s", field.Name, zeroVal))
 			} else {

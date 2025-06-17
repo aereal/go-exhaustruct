@@ -9,6 +9,37 @@ import (
 // ZeroValue returns the zero value representation for a given Go type as a string.
 // This is used to generate suggested fixes for missing fields in struct literals.
 func ZeroValue(typ types.Type) string {
+	return ZeroValueWithContext(typ, nil)
+}
+
+// ZeroValueWithContext returns the zero value representation with package context
+func ZeroValueWithContext(typ types.Type, currentPkg *types.Package) string {
+	return zeroValueInternal(typ, true, currentPkg)
+}
+
+// zeroValueInternal is the internal implementation that can control whether to use type names
+func zeroValueInternal(typ types.Type, useTypeName bool, currentPkg *types.Package) string {
+	// Check if this is a named type first
+	if named, ok := typ.(*types.Named); ok && useTypeName {
+		underlying := named.Underlying()
+		if _, isStruct := underlying.(*types.Struct); isStruct {
+			// For named struct types, check if we need the full type name
+			pkg := named.Obj().Pkg()
+
+			// If it's the same package as the current context, use short form
+			if pkg != nil && currentPkg != nil && pkg.Path() == currentPkg.Path() {
+				return zeroValueInternal(underlying, false, currentPkg)
+			}
+
+			// Different package, use full type name
+			if pkg != nil {
+				typeName := pkg.Name() + "." + named.Obj().Name()
+				return fmt.Sprintf("%s%s", typeName, zeroValueInternal(underlying, false, currentPkg))
+			}
+			return fmt.Sprintf("%s%s", named.Obj().Name(), zeroValueInternal(underlying, false, currentPkg))
+		}
+	}
+
 	switch t := typ.Underlying().(type) {
 	case *types.Basic:
 		return basicZeroValue(t)
@@ -25,7 +56,7 @@ func ZeroValue(typ types.Type) string {
 	case *types.Signature:
 		return "nil"
 	case *types.Struct:
-		return structZeroValue(t)
+		return structZeroValueWithContext(t, currentPkg)
 	case *types.Array:
 		return arrayZeroValue(t)
 	default:
@@ -56,6 +87,10 @@ func basicZeroValue(basic *types.Basic) string {
 }
 
 func structZeroValue(strct *types.Struct) string {
+	return structZeroValueWithContext(strct, nil)
+}
+
+func structZeroValueWithContext(strct *types.Struct, currentPkg *types.Package) string {
 	if strct.NumFields() == 0 {
 		return "{}"
 	}
@@ -64,7 +99,7 @@ func structZeroValue(strct *types.Struct) string {
 	for i := 0; i < strct.NumFields(); i++ {
 		field := strct.Field(i)
 		if field.Exported() {
-			fieldZero := ZeroValue(field.Type())
+			fieldZero := zeroValueInternal(field.Type(), true, currentPkg)
 			fields = append(fields, fmt.Sprintf("%s: %s", field.Name(), fieldZero))
 		}
 	}
