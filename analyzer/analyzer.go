@@ -6,6 +6,8 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"sort"
+	"strings"
 	"sync"
 
 	"golang.org/x/tools/go/analysis"
@@ -110,11 +112,7 @@ func (a *analyzer) newVisitor(pass *analysis.Pass) func(n ast.Node, push bool, s
 
 		file := a.comments.Get(pass.Fset, stack[0].(*ast.File)) //nolint:forcetypeassert
 		rc := getCompositeLitRelatedComments(stack, file)
-		pos, msg := a.processStruct(pass, lit, structTyp, typeInfo, rc)
-
-		if pos != nil {
-			pass.Reportf(*pos, "%s", msg)
-		}
+		a.processStruct(pass, lit, structTyp, typeInfo, rc)
 
 		return true
 	}
@@ -236,32 +234,42 @@ func (a *analyzer) processStruct(
 	structTyp *types.Struct,
 	info *TypeInfo,
 	comments []*ast.CommentGroup,
-) (*token.Pos, string) {
+) {
 	shouldProcess := a.shouldProcessType(info)
 
 	if shouldProcess && comment.HasDirective(comments, comment.DirectiveIgnore) {
-		return nil, ""
+		return
 	}
 
 	if !shouldProcess && !comment.HasDirective(comments, comment.DirectiveEnforce) {
-		return nil, ""
+		return
 	}
 
 	// unnamed structures are only defined in same package, along with types that has
 	// prefix identical to current package name.
 	isSamePackage := info.PackagePath == pass.Pkg.Path()
 
-	if f := a.litSkippedFields(lit, structTyp, !isSamePackage); len(f) > 0 {
-		pos := lit.Pos()
-
-		if len(f) == 1 {
-			return &pos, fmt.Sprintf("%s is missing field %s", info.ShortString(), f.String())
-		}
-
-		return &pos, fmt.Sprintf("%s is missing fields %s", info.ShortString(), f.String())
+	skippedFields := a.litSkippedFields(lit, structTyp, !isSamePackage)
+	if len(skippedFields) == 0 {
+		return
 	}
 
-	return nil, ""
+	pos := lit.Pos()
+	var msg string
+	if len(skippedFields) == 1 {
+		msg = fmt.Sprintf("%s is missing field %s", info.ShortString(), skippedFields.String())
+	} else {
+		msg = fmt.Sprintf("%s is missing fields %s", info.ShortString(), skippedFields.String())
+	}
+
+	// Generate suggested fix
+	suggestedFix := a.generateSuggestedFix(pass, lit, structTyp, skippedFields, isSamePackage)
+
+	pass.Report(analysis.Diagnostic{
+		Pos:            pos,
+		Message:        msg,
+		SuggestedFixes: []analysis.SuggestedFix{suggestedFix},
+	})
 }
 
 // shouldProcessType returns true if type should be processed basing off include
@@ -302,6 +310,92 @@ func (a *analyzer) litSkippedFields(
 	onlyExported bool,
 ) structure.Fields {
 	return a.structFields.Get(typ).Skipped(lit, onlyExported)
+}
+
+// generateSuggestedFix creates a SuggestedFix that adds missing fields with zero values
+func (a *analyzer) generateSuggestedFix(
+	pass *analysis.Pass,
+	lit *ast.CompositeLit,
+	structTyp *types.Struct,
+	skippedFields structure.Fields,
+	isSamePackage bool,
+) analysis.SuggestedFix {
+	// Determine if this is a named literal (field: value) or positional literal
+	isNamed := len(lit.Elts) > 0 && isNamedLiteralFunc(lit)
+
+	// Create field assignments for missing fields
+	var newFields []string
+	for _, field := range skippedFields {
+		// Skip unexported fields if not in same package
+		if !field.Exported && !isSamePackage {
+			continue
+		}
+
+		// Find the actual field type from the struct
+		var fieldType types.Type
+		for i := 0; i < structTyp.NumFields(); i++ {
+			structField := structTyp.Field(i)
+			if structField.Name() == field.Name {
+				fieldType = structField.Type()
+				break
+			}
+		}
+
+		if fieldType != nil {
+			zeroVal := structure.ZeroValue(fieldType)
+			if isNamed || len(lit.Elts) == 0 {
+				newFields = append(newFields, fmt.Sprintf("%s: %s", field.Name, zeroVal))
+			} else {
+				// For positional literals, we need to be more careful
+				newFields = append(newFields, zeroVal)
+			}
+		}
+	}
+
+	if len(newFields) == 0 {
+		return analysis.SuggestedFix{
+			Message: "Add missing fields with zero values",
+		}
+	}
+
+	// Sort field names for consistent output
+	sort.Strings(newFields)
+
+	// Calculate the position where we need to insert the new fields
+	var insertPos token.Pos
+	var newText string
+
+	if len(lit.Elts) == 0 {
+		// Empty struct literal: {}
+		insertPos = lit.Lbrace + 1
+		newText = strings.Join(newFields, ", ")
+	} else {
+		// Struct literal with existing fields
+		lastElt := lit.Elts[len(lit.Elts)-1]
+		insertPos = lastElt.End()
+		// Add comma and new fields
+		newText = ", " + strings.Join(newFields, ", ")
+	}
+
+	return analysis.SuggestedFix{
+		Message: "Add missing fields with zero values",
+		TextEdits: []analysis.TextEdit{
+			{
+				Pos:     insertPos,
+				End:     insertPos,
+				NewText: []byte(newText),
+			},
+		},
+	}
+}
+
+// isNamedLiteralFunc returns true if the literal uses named field syntax
+func isNamedLiteralFunc(lit *ast.CompositeLit) bool {
+	if len(lit.Elts) == 0 {
+		return false
+	}
+	_, ok := lit.Elts[0].(*ast.KeyValueExpr)
+	return ok
 }
 
 type TypeInfo struct {

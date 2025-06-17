@@ -1,0 +1,38 @@
+//nolint:all
+package suggestedfix
+
+type SimpleStruct struct {
+	A int
+	B string
+	C bool
+}
+
+type MixedStruct struct {
+	ID       int
+	Name     string
+	Exported bool
+	hidden   string
+}
+
+type NestedStruct struct {
+	Simple SimpleStruct
+	Count  int
+}
+
+func testEmptyStruct() {
+	_ = SimpleStruct{A: 0, B: "", C: false} // want "suggestedfix.SimpleStruct is missing fields A, B, C"
+}
+
+func testPartialStruct() {
+	_ = SimpleStruct{ // want "suggestedfix.SimpleStruct is missing fields B, C"
+		A: 42, B: "", C: false,
+	}
+}
+
+func testMixedFields() {
+	_ = MixedStruct{Exported: false, ID: 0, Name: "", hidden: ""} // want "suggestedfix.MixedStruct is missing fields ID, Name, Exported, hidden"
+}
+
+func testNestedStruct() {
+	_ = NestedStruct{Count: 0, Simple: {A: 0, B: "", C: false}} // want "suggestedfix.NestedStruct is missing fields Simple, Count"
+}
