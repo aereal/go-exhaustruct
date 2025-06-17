@@ -1,6 +1,8 @@
 //nolint:all
 package suggestedfix
 
+import "suggestedfix/d"
+
 type SimpleStruct struct {
 	A int
 	B string
@@ -19,6 +21,10 @@ type NestedStruct struct {
 	Count  int
 }
 
+type Nested2 struct {
+	Simple d.SimpleStruct
+}
+
 func testEmptyStruct() {
 	_ = SimpleStruct{A: 0, B: "", C: false} // want "suggestedfix.SimpleStruct is missing fields A, B, C"
 }
@@ -35,4 +41,8 @@ func testMixedFields() {
 
 func testNestedStruct() {
 	_ = NestedStruct{Count: 0, Simple: {A: 0, B: "", C: false}} // want "suggestedfix.NestedStruct is missing fields Simple, Count"
+}
+
+func testNestedStruct_composite() {
+	_ = Nested2{Simple: d.SimpleStruct{A: 0, B: "", C: false}} // want "d.SimpleStruct is missing fields A, B, C"
 }
