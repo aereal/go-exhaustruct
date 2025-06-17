@@ -323,8 +323,10 @@ func (a *analyzer) generateSuggestedFix(
 	// Determine if this is a named literal (field: value) or positional literal
 	isNamed := len(lit.Elts) > 0 && isNamedLiteralFunc(lit)
 
-	// Create field assignments for missing fields
+	// Create field assignments for missing fields and track required imports
 	var newFields []string
+	requiredImports := make(map[string]string) // path -> name
+
 	for _, field := range skippedFields {
 		// Skip unexported fields if not in same package
 		if !field.Exported && !isSamePackage {
@@ -342,6 +344,9 @@ func (a *analyzer) generateSuggestedFix(
 		}
 
 		if fieldType != nil {
+			// Collect required imports for this field type
+			a.collectRequiredImports(fieldType, pass.Pkg, requiredImports)
+
 			zeroVal := structure.ZeroValueWithContext(fieldType, pass.Pkg)
 			if isNamed || len(lit.Elts) == 0 {
 				newFields = append(newFields, fmt.Sprintf("%s: %s", field.Name, zeroVal))
@@ -377,15 +382,24 @@ func (a *analyzer) generateSuggestedFix(
 		newText = ", " + strings.Join(newFields, ", ")
 	}
 
-	return analysis.SuggestedFix{
-		Message: "Add missing fields with zero values",
-		TextEdits: []analysis.TextEdit{
-			{
-				Pos:     insertPos,
-				End:     insertPos,
-				NewText: []byte(newText),
-			},
+	// Prepare TextEdits
+	edits := []analysis.TextEdit{
+		{
+			Pos:     insertPos,
+			End:     insertPos,
+			NewText: []byte(newText),
 		},
+	}
+
+	// Add import edits if needed
+	if len(requiredImports) > 0 {
+		importEdits := a.generateImportEdits(pass, requiredImports)
+		edits = append(edits, importEdits...)
+	}
+
+	return analysis.SuggestedFix{
+		Message:   "Add missing fields with zero values",
+		TextEdits: edits,
 	}
 }
 
@@ -410,4 +424,138 @@ func (t TypeInfo) String() string {
 
 func (t TypeInfo) ShortString() string {
 	return t.PackageName + "." + t.Name
+}
+
+// collectRequiredImports recursively collects all imports needed for a type
+func (a *analyzer) collectRequiredImports(typ types.Type, currentPkg *types.Package, imports map[string]string) {
+	switch t := typ.(type) {
+	case *types.Named:
+		pkg := t.Obj().Pkg()
+		if pkg != nil && pkg != currentPkg {
+			imports[pkg.Path()] = pkg.Name()
+		}
+		// Also check the underlying type
+		a.collectRequiredImports(t.Underlying(), currentPkg, imports)
+	case *types.Struct:
+		for i := 0; i < t.NumFields(); i++ {
+			field := t.Field(i)
+			a.collectRequiredImports(field.Type(), currentPkg, imports)
+		}
+	case *types.Pointer:
+		a.collectRequiredImports(t.Elem(), currentPkg, imports)
+	case *types.Slice:
+		a.collectRequiredImports(t.Elem(), currentPkg, imports)
+	case *types.Array:
+		a.collectRequiredImports(t.Elem(), currentPkg, imports)
+	case *types.Map:
+		a.collectRequiredImports(t.Key(), currentPkg, imports)
+		a.collectRequiredImports(t.Elem(), currentPkg, imports)
+	case *types.Chan:
+		a.collectRequiredImports(t.Elem(), currentPkg, imports)
+	}
+}
+
+// generateImportEdits creates TextEdits to add missing imports
+func (a *analyzer) generateImportEdits(pass *analysis.Pass, requiredImports map[string]string) []analysis.TextEdit {
+	if len(requiredImports) == 0 {
+		return nil
+	}
+
+	// Get the current file from the pass
+	for _, f := range pass.Files {
+		return a.generateImportEditsForFile(f, requiredImports)
+	}
+
+	return nil
+}
+
+// generateImportEditsForFile generates import edits for a specific file
+func (a *analyzer) generateImportEditsForFile(file *ast.File, requiredImports map[string]string) []analysis.TextEdit {
+	var edits []analysis.TextEdit
+
+	// Check existing imports
+	existingImports := make(map[string]bool)
+	for _, imp := range file.Imports {
+		path := strings.Trim(imp.Path.Value, `"`)
+		existingImports[path] = true
+	}
+
+	// Filter out already imported packages
+	newImports := make(map[string]string)
+	for path, name := range requiredImports {
+		if !existingImports[path] {
+			newImports[path] = name
+		}
+	}
+
+	if len(newImports) == 0 {
+		return nil
+	}
+
+	// If there are existing imports, we need to convert single import to multi-import block
+	if len(file.Imports) > 0 {
+		// Find the import declaration
+		var importDecl *ast.GenDecl
+		for _, decl := range file.Decls {
+			if genDecl, ok := decl.(*ast.GenDecl); ok && genDecl.Tok == token.IMPORT {
+				importDecl = genDecl
+				break
+			}
+		}
+
+		if importDecl != nil {
+			// Check if it's already a grouped import
+			if importDecl.Lparen.IsValid() {
+				// It's already a grouped import, add new imports at the end
+				lastSpec := importDecl.Specs[len(importDecl.Specs)-1]
+				insertPos := lastSpec.End()
+
+				for path := range newImports {
+					newImportText := fmt.Sprintf("\n\t%q", path)
+					edits = append(edits, analysis.TextEdit{
+						Pos:     insertPos,
+						End:     insertPos,
+						NewText: []byte(newImportText),
+					})
+				}
+			} else {
+				// It's a single import, convert to grouped import
+				firstImport := importDecl.Specs[0].(*ast.ImportSpec)
+				importStart := importDecl.Pos()
+				importEnd := importDecl.End()
+
+				// Build new grouped import
+				newImportText := "import (\n"
+				existingPath := strings.Trim(firstImport.Path.Value, `"`)
+				newImportText += fmt.Sprintf("\t%q\n", existingPath)
+
+				for path := range newImports {
+					newImportText += fmt.Sprintf("\t%q\n", path)
+				}
+				newImportText += ")"
+
+				edits = append(edits, analysis.TextEdit{
+					Pos:     importStart,
+					End:     importEnd,
+					NewText: []byte(newImportText),
+				})
+			}
+		}
+	} else {
+		// No existing imports, create new import declaration
+		packagePos := file.Name.End()
+		newImportText := "\n\nimport (\n"
+		for path := range newImports {
+			newImportText += fmt.Sprintf("\t%q\n", path)
+		}
+		newImportText += ")"
+
+		edits = append(edits, analysis.TextEdit{
+			Pos:     packagePos,
+			End:     packagePos,
+			NewText: []byte(newImportText),
+		})
+	}
+
+	return edits
 }
