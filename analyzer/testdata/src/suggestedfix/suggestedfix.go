@@ -25,6 +25,10 @@ type Nested2 struct {
 	Simple d.SimpleStruct
 }
 
+type Nested3 struct {
+	Simple d.Simple2
+}
+
 func testEmptyStruct() {
 	_ = SimpleStruct{} // want "suggestedfix.SimpleStruct is missing fields A, B, C"
 }
@@ -49,4 +53,8 @@ func testNestedStruct_composite() {
 
 func testNestedStruct_composite_2() {
 	_ = Nested2{} // want "suggestedfix.Nested2 is missing field Simple"
+}
+
+func testNestedStruct_composite_3() {
+	_ = Nested3{Simple: d.Simple2{}} // want "d.Simple2 is missing fields A, T"
 }

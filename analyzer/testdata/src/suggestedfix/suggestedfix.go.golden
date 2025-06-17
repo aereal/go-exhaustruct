@@ -1,7 +1,10 @@
 //nolint:all
 package suggestedfix
 
-import "suggestedfix/d"
+import (
+	"suggestedfix/d"
+	"time"
+)
 
 type SimpleStruct struct {
 	A int
@@ -23,6 +26,10 @@ type NestedStruct struct {
 
 type Nested2 struct {
 	Simple d.SimpleStruct
+}
+
+type Nested3 struct {
+	Simple d.Simple2
 }
 
 func testEmptyStruct() {
@@ -49,4 +56,8 @@ func testNestedStruct_composite() {
 
 func testNestedStruct_composite_2() {
 	_ = Nested2{Simple: d.SimpleStruct{A: 0, B: "", C: false}} // want "suggestedfix.Nested2 is missing field Simple"
+}
+
+func testNestedStruct_composite_3() {
+	_ = Nested3{Simple: d.Simple2{A: 0, T: time.Time{}}} // want "d.Simple2 is missing fields A, T"
 }
