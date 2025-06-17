@@ -40,7 +40,7 @@ func testMixedFields() {
 }
 
 func testNestedStruct() {
-	_ = NestedStruct{Count: 0, Simple: {A: 0, B: "", C: false}} // want "suggestedfix.NestedStruct is missing fields Simple, Count"
+	_ = NestedStruct{Count: 0, Simple: SimpleStruct{A: 0, B: "", C: false}} // want "suggestedfix.NestedStruct is missing fields Simple, Count"
 }
 
 func testNestedStruct_composite() {
