@@ -46,3 +46,7 @@ func testNestedStruct() {
 func testNestedStruct_composite() {
 	_ = Nested2{Simple: d.SimpleStruct{}} // want "d.SimpleStruct is missing fields A, B, C"
 }
+
+func testNestedStruct_composite_2() {
+	_ = Nested2{} // want "suggestedfix.Nested2 is missing field Simple"
+}
